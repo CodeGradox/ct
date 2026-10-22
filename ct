@@ -1,0 +1,41 @@
+#!/bin/sh
+# ct: open, or reopen, a tmux session running Claude Code for the current folder.
+# Remembers the session name per folder, so a bare `ct` gets you back in.
+#
+#   ct          reuse this folder's saved name (asks the first time)
+#   ct <name>   use <name> and remember it for this folder
+set -eu
+
+store="${XDG_STATE_HOME:-$HOME/.local/state}/ct/sessions"
+mkdir -p "$(dirname "$store")"
+touch "$store"
+
+# ENVIRON instead of -v: -v would mangle backslashes in paths.
+export CT_DIR="$(pwd -P)"
+saved=$(awk -F '\t' '$1 == ENVIRON["CT_DIR"] { n = $2 } END { print n }' "$store")
+
+name=${1:-$saved}
+if [ -z "$name" ]; then
+  default=$(basename "$CT_DIR")
+  printf "tmux session name [%s]: " "$default"
+  read -r name
+  name=${name:-$default}
+fi
+# tmux reads "." and ":" in a target as window/pane separators.
+name=$(printf %s "$name" | tr '.:' '__')
+
+if [ "$name" != "$saved" ]; then
+  awk -F '\t' '$1 != ENVIRON["CT_DIR"]' "$store" > "$store.tmp"
+  printf '%s\t%s\n' "$CT_DIR" "$name" >> "$store.tmp"
+  mv "$store.tmp" "$store"
+fi
+
+# "=" makes tmux match the name exactly, not as a prefix.
+tmux has-session -t "=$name" 2>/dev/null ||
+  tmux new-session -d -s "$name" -c "$CT_DIR" claude
+
+if [ -n "${TMUX:-}" ]; then
+  exec tmux switch-client -t "=$name"
+else
+  exec tmux attach-session -t "=$name"
+fi
